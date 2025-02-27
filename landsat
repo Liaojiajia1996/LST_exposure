@@ -1,0 +1,65 @@
+// 定义研究区域
+var roi = ee.FeatureCollection('projects/charged-chess-405202/assets/Naha_city');
+var style_set = {color: "red", fillColor: "00000000"}; 
+Map.addLayer(roi.style(style_set), {}, "shape"); 
+Map.centerObject(roi, 8); 
+
+// 去云和其他数据质量控制函数
+function maskL8sr(image) {
+  var qaMask = image.select('QA_PIXEL').bitwiseAnd(parseInt('11111', 2)).eq(0);
+  var saturationMask = image.select('QA_RADSAT').eq(0); 
+  var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2); 
+  var thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0); 
+
+  return image.addBands(opticalBands, null, true)
+              .addBands(thermalBands, null, true)
+              .updateMask(qaMask)
+              .updateMask(saturationMask);
+}
+
+// 获取Landsat 8地表温度数据
+var dataset = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+                .filterDate('2023-06-01', '2023-08-30') 
+                .filterBounds(roi)
+                .map(maskL8sr)
+                .median() 
+                .clip(roi);
+
+// 提取地表温度波段
+var img = dataset.select("ST_B10");
+
+// 计算LST并转换为摄氏度
+var lst_L8 = img.expression(
+    'B1 - 273.15', 
+    {
+        B1: img.select('ST_B10'),
+    }
+);
+
+// 显示LST的直方图
+print("LST处理后直方图", ui.Chart.image.histogram(lst_L8, roi, 100, 258));
+
+// 在地图上显示LST数据
+Map.addLayer(lst_L8, {
+  'min': 2,
+  'max': 49,
+  'palette': ["eff3ff","c6dbef","9ecae1","6baed6","4292c6","2171b5","084594",
+              "fff5f0","fee0d2","fcbba1","fc9272","fb6a4a","ef3b2c","cb181d","99000d"]
+}, 'lst_L8');
+
+// 导出处理后的地表温度影像到Google Drive
+function exportImage(image, roi, fileName) {
+  Export.image.toDrive({
+    image: image,
+    description: "Landsat8_" + fileName,
+    fileNamePrefix: fileName,  
+    folder: "Landsat 8", 
+    scale: 30,  
+    region: roi,  
+    maxPixels: 1e13,  
+    crs: "EPSG:4326"  
+  });
+}
+
+// 导出LST数据
+exportImage(lst_L8, roi, "LST_2023_July_to_aug");
